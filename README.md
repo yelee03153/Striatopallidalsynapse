@@ -50,11 +50,13 @@ source synapse-env/bin/activate
 
 # Install required packages
 pip install -r requirements.txt
-
+```
+---
 ## 🏃‍♀️ Run
-
+```bash
 #Extract Features 
 python scripts/feature_extraction.py
 
-# Fit Synaptic Models
-python scripts/main.py --region VM --n 10 --ext_type control
+Fit Synaptic Models
+#python scripts/main.py --region VM --n 10 --ext_type control
+```
