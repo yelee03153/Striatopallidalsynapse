@@ -22,6 +22,7 @@ build/
 # System files
 .DS_Store
 Thumbs.db
+**/.DS_Store
 
 # IDE/project files
 .vscode/
