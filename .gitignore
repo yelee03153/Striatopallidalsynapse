@@ -1,0 +1,35 @@
+# Virtual environments
+.venv/
+venv/
+env/
+
+# Jupyter notebooks and checkpoints
+.ipynb_checkpoints/
+**/.ipynb_checkpoints/
+
+# Compiled Python files
+__pycache__/
+**/__pycache__/
+
+*.py[cod]
+*.so
+
+# Packaging info
+*.egg-info/
+dist/
+build/
+
+# System files
+.DS_Store
+Thumbs.db
+
+# IDE/project files
+.vscode/
+.idea/
+
+# Logs and temporary files
+*.log
+*.tmp
+
+# Environment configs
+.env
