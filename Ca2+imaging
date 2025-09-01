@@ -1,0 +1,546 @@
+%% ------------------------------------------------------------------------
+%  Striatopallidal axonal bouton analysis (GCaMP6f)
+%  - ROI detection & curation
+%  - Manual alignment (translation only)
+%  - Manual background ROI
+%  - Intensity export and ΔF/F0 computation
+%
+%  ΔF/F0 = (F − F0) / (F0 − Fb)
+%    F  : raw ROI mean per frame (no background subtraction in numerator)
+%    F0 : ROI baseline fluorescence from Base condition (pre-QP)
+%    Fb : background baseline fluorescence from user-selected background ROI
+%
+%  MATLAB R2024b
+%% ------------------------------------------------------------------------
+
+% (Optional) Bio-Formats path setup
+% addpath('C:\Program Files\MATLAB\R2024b\toolbox\bfmatlab');
+% savepath;
+% javaaddpath('C:\Program Files\MATLAB\R2024b\toolbox\bfmatlab\bioformats_package.jar');
+% if exist('bfCheckJavaPath', 'file') == 2
+%     bfCheckJavaPath();
+% else
+%     error('Bio-Formats package not found or improperly configured.');
+% end
+
+%% ------------------------------------------------------------------------
+%  Input folders
+%% ------------------------------------------------------------------------
+A_dir = '\\10.72.18.38\Data folder\YELee\1. 논문\Striatopallidal\3. NC_Revision\0. Manuscript\수정본\Main fig 8_new\Ca2+axonterminal_Supple\Ctrl\DL\DLQP';  % QP condition
+B_dir = '\\10.72.18.38\Data folder\YELee\1. 논문\Striatopallidal\3. NC_Revision\0. Manuscript\수정본\Main fig 8_new\Ca2+axonterminal_Supple\Ctrl\DL\DL';    % Base condition
+
+% Output Excel file
+excel_file_path = ['\\10.72.18.38\Data folder\YELee\1. 논문\Striatopallidal\3. NC_Revision\0. Manuscript\수정본\Main fig 8_new\Ca2+axonterminal_Supple\Ctrl\DL\DL.xlsx'];
+
+% File lists
+A_files = dir(fullfile(A_dir, '*.png'));
+A_files = A_files(~ismember({A_files.name}, {'.','..'}));
+
+B_files = dir(fullfile(B_dir, '*.png'));
+B_files = B_files(~ismember({B_files.name}, {'.','..'}));
+
+fprintf('=== A(QP) file list ===\n');
+for i = 1:numel(A_files)
+    fprintf('File %d: %s\n', i, A_files(i).name);
+end
+
+fprintf('=== B(Base) file list ===\n');
+for i = 1:numel(B_files)
+    fprintf('File %d: %s\n', i, B_files(i).name);
+end
+
+if numel(A_files) < 6 || numel(B_files) < 6
+    warning('It is recommended to have at least 6 frames in each folder for safe indexing (max-5 usage).');
+end
+
+%% ------------------------------------------------------------------------
+%  Globals for manual alignment (translation only)
+%% ------------------------------------------------------------------------
+global moveA; global moveB; global moveC;
+moveA = [0, 0];     % QP: max (moving) -> max-5 (fixed)
+moveB = [0, 0];     % QP vs Base: QP max (moving) -> Base max-5 (fixed)
+moveC = [0, 0];     % Base internal: Base max-5 (moving) -> Base max (fixed)
+
+% ROI size filter (pixels)
+MIN_ROI_SIZE = 8;
+
+%% ------------------------------------------------------------------------
+%  Find frames with highest mean intensity
+%% ------------------------------------------------------------------------
+mean_values_A = zeros(numel(A_files),1);
+for i = 1:numel(A_files)
+    img = imread(fullfile(A_dir, A_files(i).name));
+    mean_values_A(i) = mean(img(:));
+end
+[~, max_idx_A] = max(mean_values_A);
+if max_idx_A <= 5
+    error('max_idx_A - 5 is not valid. Ensure there are enough frames before the max frame.');
+end
+best_img_A   = imread(fullfile(A_dir, A_files(max_idx_A).name));
+best_img_A_5 = imread(fullfile(A_dir, A_files(max_idx_A-5).name));
+
+mean_values_B = zeros(numel(B_files),1);
+for i = 1:numel(B_files)
+    img = imread(fullfile(B_dir, B_files(i).name));
+    mean_values_B(i) = mean(img(:));
+end
+[~, max_idx_B] = max(mean_values_B);
+if max_idx_B <= 5
+    error('max_idx_B - 5 is not valid. Ensure there are enough frames before the max frame.');
+end
+best_img_B   = imread(fullfile(B_dir, B_files(max_idx_B).name));
+best_img_B_5 = imread(fullfile(B_dir, B_files(max_idx_B-5).name));
+
+%% ------------------------------------------------------------------------
+%  Interactive thresholding (contrast & threshold via sliders)
+%% ------------------------------------------------------------------------
+[threshold, contrast] = interactiveThresholding(best_img_A);
+
+% Binary mask from A max image
+adjusted_A = imadjust(best_img_A, [], [], contrast);
+bw_img_A = imbinarize(adjusted_A, graythresh(adjusted_A) * threshold);
+
+% Initial ROIs
+[labeledImage, ROIs_A] = bwlabel(bw_img_A);
+
+% Remove tiny ROIs automatically
+props = regionprops(labeledImage, 'Area');
+validIdx = find([props.Area] >= MIN_ROI_SIZE);
+labeledImage = ismember(labeledImage, validIdx) .* labeledImage;
+[labeledImage, ROIs_A] = bwlabel(labeledImage > 0);
+disp(['Automatically removed ', num2str(numel(props) - numel(validIdx)), ' small ROIs.']);
+
+% User curation: click unwanted ROIs to remove
+fig = figure; imshow(best_img_A, []); hold on;
+set(fig, 'Pointer', 'fullcrosshair');
+boundaries = bwboundaries(labeledImage);
+for k = 1:length(boundaries)
+    b = boundaries{k};
+    plot(b(:,2), b(:,1), 'g', 'LineWidth', 0.5);
+end
+title('Click unwanted ROIs to remove (press Enter to finish)');
+
+while true
+    [xc, yc, button] = ginput(1);
+    if isempty(button) || button == 13, break; end
+    xi = round(xc); yi = round(yc);
+    if xi<1 || yi<1 || xi>size(labeledImage,2) || yi>size(labeledImage,1)
+        disp('Image coordinates out of bounds. Click again.'); continue;
+    end
+    labelToRemove = labeledImage(yi, xi);
+    if labelToRemove > 0
+        labeledImage(labeledImage == labelToRemove) = 0;
+        disp(['Removed ROI #', num2str(labelToRemove)]);
+        cla; imshow(best_img_A, []); hold on;
+        boundaries = bwboundaries(labeledImage);
+        for k2 = 1:length(boundaries)
+            b2 = boundaries{k2};
+            plot(b2(:,2), b2(:,1), 'g', 'LineWidth', 0.5);
+        end
+        title('Continue clicking to remove (press Enter to finish)'); drawnow;
+    else
+        disp('No ROI at the clicked position.');
+    end
+end
+set(fig, 'Pointer', 'arrow'); close(fig);
+[labeledImage, ROIs_A] = bwlabel(labeledImage > 0);
+
+% Finalize ROIs (filtered)
+[filteredLabeledImage, ROIs_A] = extractParticlesAndBoundaries(labeledImage, 'A Image - Highest Intensity', MIN_ROI_SIZE);
+
+% Overlay: A original + ROI numbering
+figure; imshow(best_img_A, []); title('A: Original image with ROI boundaries and numbering'); hold on;
+for r = 1:ROIs_A
+    boundary = bwboundaries(filteredLabeledImage == r);
+    if ~isempty(boundary)
+        plot(boundary{1}(:,2), boundary{1}(:,1), 'g', 'LineWidth', 0.5);
+        text(mean(boundary{1}(:,2)), mean(boundary{1}(:,1)), sprintf('%d', r), 'Color', 'yellow', 'FontSize', 10);
+    end
+end
+hold off;
+
+% Overlay without numbering
+figure; imshow(best_img_A, []); title('A: Original image with ROI boundaries (no numbering)'); hold on;
+for r = 1:ROIs_A
+    boundary = bwboundaries(filteredLabeledImage == r);
+    if ~isempty(boundary)
+        plot(boundary{1}(:,2), boundary{1}(:,1), 'g', 'LineWidth', 0.5);
+    end
+end
+hold off;
+
+%% ------------------------------------------------------------------------
+%  Manual alignment (translation only) using red/green overlays
+%% ------------------------------------------------------------------------
+% Folder A: align max (moving, green) to 5-frames earlier (fixed, red)
+fixed_red   = repmat(mat2gray(best_img_A_5), [1,1,3]); fixed_red(:,:,2) = 0; fixed_red(:,:,3) = 0;
+moving_green = repmat(mat2gray(best_img_A),  [1,1,3]); moving_green(:,:,1) = 0; moving_green(:,:,3) = 0;
+alpha = 0.5;
+blended = fixed_red*(1-alpha) + moving_green*alpha;
+
+figA = figure; imshow(blended);
+title('Align Folder A (Max → 5-frames earlier). Use arrow keys. Press Enter to confirm.');
+set(figA, 'KeyPressFcn', @keyPressHandlerA);
+uiwait(figA);
+move_max = moveA;
+
+% Apply moveA to ROI mask (A condition)
+shifted_ROI = imtranslate(filteredLabeledImage, move_max, 'OutputView', 'same', 'FillValues', 0);
+figure; imshow(best_img_A_5, []); hold on;
+for r = 1:ROIs_A
+    boundary = bwboundaries(shifted_ROI == r);
+    if ~isempty(boundary)
+        plot(boundary{1}(:,2), boundary{1}(:,1), 'r', 'LineWidth', 0.5);
+    end
+end
+title('A: Shifted ROI boundaries on 5-frames earlier image'); hold off;
+
+% Folder B vs A: align QP max (moving) to Base 5-frames earlier (fixed)
+fixed_red_B   = repmat(mat2gray(best_img_B_5), [1,1,3]); fixed_red_B(:,:,2) = 0; fixed_red_B(:,:,3) = 0;
+moving_green_B = repmat(mat2gray(best_img_A),  [1,1,3]); moving_green_B(:,:,1) = 0; moving_green_B(:,:,3) = 0;
+blended_B = fixed_red_B*(1-alpha) + moving_green_B*alpha;
+
+figB = figure; imshow(blended_B);
+title('Align Folder B (QP Max → Base 5-frames earlier). Use arrow keys. Press Enter to confirm.');
+set(figB, 'KeyPressFcn', @keyPressHandlerB);
+uiwait(figB);
+move_qp_to_base = moveB;
+
+% Apply moveB to ROI mask (Base condition reference: 5-frames earlier)
+shifted_ROI_B = imtranslate(filteredLabeledImage, moveB, 'OutputView', 'same', 'FillValues', 0);
+figure; imshow(best_img_B_5, []); hold on;
+for r = 1:ROIs_A
+    boundary = bwboundaries(shifted_ROI_B == r);
+    if ~isempty(boundary)
+        plot(boundary{1}(:,2), boundary{1}(:,1), 'r', 'LineWidth', 0.5);
+    end
+end
+title('B: Shifted ROI boundaries on 5-frames earlier image (Base)'); hold off;
+
+% Folder B internal: align Base 5-frames earlier (moving) to Base max (fixed)
+fixed_red   = repmat(mat2gray(best_img_B),   [1,1,3]); fixed_red(:,:,2) = 0; fixed_red(:,:,3) = 0;
+moving_green = repmat(mat2gray(best_img_B_5),[1,1,3]); moving_green[:,:,1] = 0; moving_green(:,:,3) = 0;
+blended = fixed_red*(1-alpha) + moving_green*alpha;
+
+figC = figure; imshow(blended);
+title('Align Folder B (5-frames earlier → Base Max). Use arrow keys. Press Enter to confirm.');
+set(figC, 'KeyPressFcn', @keyPressHandlerC);
+uiwait(figC);
+move_base_5_to_max = moveC;
+
+% Apply moveC to get final Base-aligned ROI mask (on Base max)
+shifted_ROI_BC = imtranslate(shifted_ROI_B, move_base_5_to_max, 'OutputView', 'same', 'FillValues', 0);
+figure; imshow(best_img_B, []); hold on;
+for r = 1:ROIs_A
+    boundary = bwboundaries(shifted_ROI_BC == r);
+    if ~isempty(boundary)
+        plot(boundary{1}(:,2), boundary{1}(:,1), 'r', 'LineWidth', 0.5);
+        text(mean(boundary{1}(:,2)), mean(boundary{1}(:,1)), sprintf('%d', r), 'Color', 'yellow', 'FontSize', 10);
+    end
+end
+title('B: Shifted ROI boundaries on Base Max image'); hold off;
+
+%% ------------------------------------------------------------------------
+%  INTENSITY EXPORT (raw mean F per ROI per frame)
+%% ------------------------------------------------------------------------
+% A (QP) raw intensity using ROI masks:
+%  - Before window: original ROI
+%  - Around center window: ROI shifted by moveA
+%  - After window: original ROI
+intensity_A_before = zeros(max_idx_A-3, ROIs_A);
+for i = 1:max_idx_A-3
+    img = imread(fullfile(A_dir, A_files(i).name));
+    for r = 1:ROIs_A
+        mask = filteredLabeledImage == r;
+        intensity_A_before(i, r) = mean(img(mask));
+    end
+end
+
+intensity_A_moveA = zeros(5, ROIs_A);
+for i = max_idx_A-2:max_idx_A+2
+    img = imread(fullfile(A_dir, A_files(i).name));
+    for r = 1:ROIs_A
+        mask = shifted_ROI == r;
+        intensity_A_moveA(i - (max_idx_A-3), r) = mean(img(mask));
+    end
+end
+
+intensity_A_after = zeros(numel(A_files) - (max_idx_A + 2), ROIs_A);
+for i = max_idx_A+3:numel(A_files)
+    img = imread(fullfile(A_dir, A_files(i).name));
+    for r = 1:ROIs_A
+        mask = filteredLabeledImage == r;
+        intensity_A_after(i - (max_idx_A+2), r) = mean(img(mask));
+    end
+end
+
+% B (Base) raw intensity using ROI masks:
+%  - Before: shifted by moveB
+%  - Around center: shifted by moveC (on top of moveB)
+%  - After: shifted by moveB
+intensity_B_before = zeros(max_idx_A-3, ROIs_A);
+for i = 1:max_idx_A-3
+    img = imread(fullfile(B_dir, B_files(i).name));
+    for r = 1:ROIs_A
+        mask = shifted_ROI_B == r;
+        intensity_B_before(i, r) = mean(img(mask));
+    end
+end
+
+intensity_B_moveC = zeros(5, ROIs_A);
+for i = max_idx_A-2:max_idx_A+2
+    img = imread(fullfile(B_dir, B_files(i).name));
+    for r = 1:ROIs_A
+        mask = shifted_ROI_BC == r;
+        intensity_B_moveC(i - (max_idx_A-3), r) = mean(img(mask));
+    end
+end
+
+intensity_B_after = zeros(numel(B_files) - (max_idx_A + 2), ROIs_A);
+for i = max_idx_A+3:numel(B_files)
+    img = imread(fullfile(B_dir, B_files(i).name));
+    for r = 1:ROIs_A
+        mask = shifted_ROI_B == r;
+        intensity_B_after(i - (max_idx_A+2), r) = mean(img(mask));
+    end
+end
+
+% Combine and export raw intensity
+intensity_A = [intensity_A_before; intensity_A_moveA; intensity_A_after];
+intensity_B = [intensity_B_before; intensity_B_moveC; intensity_B_after];
+
+output_table_A = array2table(intensity_A);
+output_table_B = array2table(intensity_B);
+
+writetable(output_table_A, excel_file_path, 'Sheet', 1, 'WriteVariableNames', true); % A raw
+writetable(output_table_B, excel_file_path, 'Sheet', 2, 'WriteVariableNames', true); % B raw
+
+%% ------------------------------------------------------------------------
+%  MANUAL BACKGROUND ROI (baseline) & ΔF/F0 computation
+%% ------------------------------------------------------------------------
+% Background ROI is drawn on Base 5-frames earlier (baseline-like image)
+figure; imshow(best_img_B_5, []); title('Draw BACKGROUND ROI (polygon) on baseline image, double-click to finish');
+bgMask = roipoly; close(gcf);
+if isempty(bgMask) || ~any(bgMask(:))
+    error('Background ROI (bgMask) is empty. Please draw a valid background region.');
+end
+
+% Baseline frame range (Base pre-QP): reuse 1 .. (max_idx_A - 3)
+baseline_start = 1;
+baseline_end   = max_idx_A - 3;
+if baseline_end < baseline_start
+    error('Baseline range 1 .. (max_idx_A - 3) is empty. Check indices.');
+end
+baseline_idx = baseline_start:baseline_end;
+
+% Fb0: background fluorescence baseline (scalar)
+bg_base_baseline = zeros(numel(baseline_idx),1);
+for k = 1:numel(baseline_idx)
+    imgB = imread(fullfile(B_dir, B_files(baseline_idx(k)).name));
+    bg_base_baseline(k) = mean(imgB(bgMask));
+end
+Fb0 = mean(bg_base_baseline);
+
+% F0_perROI: ROI baseline fluorescence (from Base, pre-QP)
+F0_perROI = zeros(1, ROIs_A);
+for r = 1:ROIs_A
+    maskROI = shifted_ROI_B == r;   % ROI aligned to Base 5-frames earlier
+    vals = [];
+    for k = 1:numel(baseline_idx)
+        imgB = imread(fullfile(B_dir, B_files(baseline_idx(k)).name));
+        vals(end+1) = mean(imgB(maskROI)); %#ok<AGROW>
+    end
+    F0_perROI(r) = mean(vals);
+end
+
+if any((F0_perROI - Fb0) <= 0)
+    warning('Some ROIs have F0 - Fb0 <= 0. ΔF/F0 denominator may be non-positive.');
+end
+
+% Build full-frame raw F (no background subtraction) for Base/QP
+F_base_all = computeRawFoverTime(B_dir, B_files, shifted_ROI_BC, ROIs_A); % ROI on Base Max
+F_qp_all   = computeRawFoverTime(A_dir, A_files, shifted_ROI,    ROIs_A); % ROI on QP (moveA)
+
+% ΔF/F0 per frame × ROI
+dFF_base = zeros(size(F_base_all));
+dFF_qp   = zeros(size(F_qp_all));
+den      = (F0_perROI - Fb0);  % 1 × ROI
+
+for r = 1:ROIs_A
+    if den(r) == 0
+        warning('ROI %d: F0 - Fb0 = 0. Using eps.', r);
+        den(r) = eps;
+    end
+    dFF_base(:, r) = (F_base_all(:, r) - F0_perROI(r)) / den(r);
+    dFF_qp(:, r)   = (F_qp_all(:, r)   - F0_perROI(r)) / den(r);
+end
+
+% Save ΔF/F0 and provenance tables
+try
+    writetable(array2table(dFF_base), excel_file_path, 'Sheet', 3, 'WriteVariableNames', true); % Base dF/F0
+    writetable(array2table(dFF_qp),   excel_file_path, 'Sheet', 4, 'WriteVariableNames', true); % QP   dF/F0
+    F0_table  = array2table(F0_perROI, 'VariableNames', compose('ROI_%d',1:ROIs_A));
+    Fb0_table = table(Fb0, 'VariableNames', {'Fb0'});
+    writetable(F0_table,  excel_file_path, 'Sheet', 5, 'WriteVariableNames', true);
+    writetable(Fb0_table, excel_file_path, 'Sheet', 6, 'WriteVariableNames', true);
+    disp('ΔF/F0 (Base, QP), F0_perROI, Fb0 saved to Excel sheets 3–6.');
+catch ME
+    warning('Failed to write ΔF/F0 outputs: %s', ME.message);
+end
+
+%% ------------------------------------------------------------------------
+%  Local functions (MATLAB allows local functions at end of script)
+%% ------------------------------------------------------------------------
+function [filteredLabeledImage, numValidParticles] = extractParticlesAndBoundaries(labeledImage, titleText, minSize)
+    props = regionprops(labeledImage, 'Area', 'Centroid');
+    validParticleIdx = find([props.Area] >= minSize);
+    if isempty(validParticleIdx)
+        warning('No valid ROIs detected after filtering.');
+        filteredLabeledImage = zeros(size(labeledImage));
+        numValidParticles = 0;
+        figure; imshow(filteredLabeledImage, []); title([titleText, ' - Particles detected: 0']);
+        return;
+    end
+    filteredLabeledImage = double(ismember(labeledImage, validParticleIdx)) .* labeledImage;
+    [filteredLabeledImage, numValidParticles] = bwlabel(filteredLabeledImage);
+    figure; imshow(filteredLabeledImage, []); title([titleText, ' - Particles detected: ', num2str(numValidParticles)]);
+end
+
+function [finalThreshold, finalContrast] = interactiveThresholding(image)
+    % Interactive thresholding (sliders for contrast & Otsu multiplier)
+    global threshold contrast originalImage confirmed thresholdSlider contrastSlider fig;
+    originalImage = image;
+    threshold = 0.5;  % Otsu multiplier
+    contrast  = 1.0;  % gamma
+    confirmed = false;
+
+    fig = figure('Name', 'Interactive Thresholding', 'NumberTitle', 'off', 'KeyPressFcn', @keyPressHandler);
+    set(fig, 'WindowKeyPressFcn', @keyPressHandler);
+
+    uicontrol('Style', 'text',   'Position', [20, 10, 100, 20], 'String', 'Threshold');
+    thresholdSlider = uicontrol('Style', 'slider','Min', 0.1, 'Max', 2, 'Value', threshold, 'Position', [120, 10, 300, 20], 'Callback', @(src,~) updateDisplay());
+    uicontrol('Style', 'text',   'Position', [450, 10, 100, 20], 'String', 'Contrast');
+    contrastSlider  = uicontrol('Style', 'slider','Min', 0.5, 'Max', 3, 'Value', contrast,  'Position', [550, 10, 300, 20], 'Callback', @(src,~) updateDisplay());
+
+    updateDisplay(); drawnow; uiwait(fig);
+
+    if isvalid(thresholdSlider) && isvalid(contrastSlider)
+        finalThreshold = get(thresholdSlider, 'Value');
+        finalContrast  = get(contrastSlider, 'Value');
+    else
+        finalThreshold = threshold;
+        finalContrast  = contrast;
+    end
+end
+
+function updateDisplay()
+    global originalImage threshold contrast thresholdSlider contrastSlider;
+    if isvalid(thresholdSlider), threshold = get(thresholdSlider, 'Value'); end
+    if isvalid(contrastSlider),  contrast  = get(contrastSlider,  'Value'); end
+
+    adjustedImage = imadjust(originalImage, [], [], contrast);
+    otsuLevel = graythresh(adjustedImage);
+    thresholdedImage = imbinarize(adjustedImage, otsuLevel * threshold);
+
+    overlay = cat(3, zeros(size(thresholdedImage)), ones(size(thresholdedImage)), zeros(size(thresholdedImage)));
+    overlay = im2uint8(overlay) .* uint8(thresholdedImage);
+
+    subplot(1,2,1), imshow(originalImage, []), title('Original Image');
+    subplot(1,2,2), imshow(adjustedImage, []), hold on;
+    h = imshow(overlay); set(h, 'AlphaData', double(thresholdedImage)*0.5);
+    title('Thresholding Overlay'); hold off; drawnow;
+end
+
+function keyPressHandler(~, event)
+    global confirmed threshold contrast thresholdSlider contrastSlider fig;
+    switch event.Key
+        case 'return'
+            confirmed = true;
+            if isvalid(thresholdSlider) && isvalid(contrastSlider)
+                assignin('base', 'finalThreshold', get(thresholdSlider, 'Value'));
+                assignin('base', 'finalContrast',  get(contrastSlider,  'Value'));
+            end
+            uiresume(fig); close(fig);
+        case 'r'
+            threshold = 0.5; contrast = 1.0;
+            if isvalid(thresholdSlider), set(thresholdSlider, 'Value', threshold); end
+            if isvalid(contrastSlider),  set(contrastSlider,  'Value', contrast);  end
+            updateDisplay();
+    end
+end
+
+function keyPressHandlerA(~, event)
+    global moveA;
+    step = 1;
+    switch event.Key
+        case 'leftarrow',  moveA(1) = moveA(1) - step;
+        case 'rightarrow', moveA(1) = moveA(1) + step;
+        case 'uparrow',    moveA(2) = moveA(2) - step;
+        case 'downarrow',  moveA(2) = moveA(2) + step;
+        case 'return',     uiresume; return;
+    end
+    best_img_A   = evalin('base', 'best_img_A');
+    best_img_A_5 = evalin('base', 'best_img_A_5');
+    if isempty(best_img_A) || isempty(best_img_A_5), warning('best_img_A or best_img_A_5 is empty.'); return; end
+
+    moving_green = repmat(mat2gray(best_img_A),   [1,1,3]); moving_green(:,:,1)=0; moving_green(:,:,3)=0;
+    fixed_red    = repmat(mat2gray(best_img_A_5), [1,1,3]); fixed_red(:,:,2)=0; fixed_red(:,:,3)=0;
+    shifted_moving = imtranslate(moving_green, moveA, 'OutputView','same');
+    alpha = 0.5; blended = fixed_red*(1-alpha) + shifted_moving*alpha;
+    imshow(blended);
+end
+
+function keyPressHandlerB(~, event)
+    global moveB;
+    step = 1;
+    switch event.Key
+        case 'leftarrow',  moveB(1) = moveB(1) - step;
+        case 'rightarrow', moveB(1) = moveB(1) + step;
+        case 'uparrow',    moveB(2) = moveB(2) - step;
+        case 'downarrow',  moveB(2) = moveB(2) + step;
+        case 'return',     uiresume; return;
+    end
+    best_img_A   = evalin('base', 'best_img_A');
+    best_img_B_5 = evalin('base', 'best_img_B_5');
+    if isempty(best_img_A) || isempty(best_img_B_5), warning('best_img_A or best_img_B_5 is empty.'); return; end
+
+    moving_green = repmat(mat2gray(best_img_A),   [1,1,3]); moving_green(:,:,1)=0; moving_green(:,:,3)=0;
+    fixed_red    = repmat(mat2gray(best_img_B_5), [1,1,3]); fixed_red(:,:,2)=0; fixed_red(:,:,3)=0;
+    shifted_moving = imtranslate(moving_green, moveB, 'OutputView','same');
+    alpha = 0.5; blended = fixed_red*(1-alpha) + shifted_moving*alpha;
+    imshow(blended);
+end
+
+function keyPressHandlerC(~, event)
+    global moveC;
+    step = 1;
+    switch event.Key
+        case 'leftarrow',  moveC(1) = moveC(1) - step;
+        case 'rightarrow', moveC(1) = moveC(1) + step;
+        case 'uparrow',    moveC(2) = moveC(2) - step;
+        case 'downarrow',  moveC(2) = moveC(2) + step;
+        case 'return', fprintf('Folder B internal alignment: Shift (x,y) = [%d, %d]\n', moveC(1), moveC(2)); uiresume; return;
+    end
+    best_img_B   = evalin('base', 'best_img_B');
+    best_img_B_5 = evalin('base', 'best_img_B_5');
+    if isempty(best_img_B) || isempty(best_img_B_5), warning('best_img_B or best_img_B_5 is empty.'); return; end
+
+    moving_green = repmat(mat2gray(best_img_B_5), [1,1,3]); moving_green(:,:,1)=0; moving_green(:,:,3)=0;
+    fixed_red    = repmat(mat2gray(best_img_B),   [1,1,3]); fixed_red(:,:,2)=0; fixed_red(:,:,3)=0;
+    shifted_moving = imtranslate(moving_green, moveC, 'OutputView','same');
+    alpha = 0.5; blended = fixed_red*(1-alpha) + shifted_moving*alpha;
+    imshow(blended);
+end
+
+function Fmat = computeRawFoverTime(fileDir, fileList, roiLabelImage, numROIs)
+    % Returns frame × ROI matrix of raw mean fluorescence (no background subtraction)
+    numFrames = numel(fileList);
+    Fmat = zeros(numFrames, numROIs);
+    for iFrame = 1:numFrames
+        img = imread(fullfile(fileDir, fileList(iFrame).name));
+        for r = 1:numROIs
+            mask = roiLabelImage == r;
+            Fmat(iFrame, r) = mean(img(mask));
+        end
+    end
+end
