@@ -2,7 +2,7 @@ regions = {'DL', 'VL', 'DM', 'VM'};
 
 for jj = 1:4
     region = regions{jj};
-    T = readtable('C:\Users\User\Desktop\Sr2+ GPe mini data_YELEE.xlsx','Sheet',region,'VariableNamingRule', 'preserve');
+    T = readtable('Sr2+ GPe mini data_YELEE.xlsx','Sheet',region,'VariableNamingRule', 'preserve');
     nanidx = find(isnan(T.Var1));
     newidx = zeros(1,length(nanidx)+1);
     newidx(1) = 0;
@@ -18,4 +18,4 @@ for jj = 1:4
     
 end
 %%
-save("GPe_SR2+_mini_4","RESULT");
+save("GPe_SR2+_mini","RESULT");
