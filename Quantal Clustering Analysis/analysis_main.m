@@ -197,7 +197,7 @@ else
 end
 
 % Save resulting data
-save('E:\수업\2024 AI based neural data science\GPe\github\Results\analysis_results.mat', 'Xz', 'Zmat', 'Sobs', 'Sperm', 'Delta', 'pPerm','pMat');
+save('analysis_results.mat', 'Xz', 'Zmat', 'Sobs', 'Sperm', 'Delta', 'pPerm','pMat');
 
 %% -------------------------------------------------------------------------
 function [p,chi2,df] = chi2gof2D(tbl)
@@ -205,3 +205,4 @@ function [p,chi2,df] = chi2gof2D(tbl)
     chi2=sum((tbl-expT).^2 ./ (expT+eps),'all');
     df=(size(tbl,1)-1)*(size(tbl,2)-1); p=1-chi2cdf(chi2,df);
 end
+
