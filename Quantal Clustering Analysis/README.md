@@ -2,7 +2,7 @@
 
 This repository contains the MATLAB implementation for quantifying the distinctiveness of specific brain regions (DL, VL, DM, VM) based on their quantal characteristics. This pipeline was utilized to generate **Extended Data Figure 8** for our publication.
 
-## 🔬 Overview
+## Overview
 
 The analysis follows a multi-step statistical framework to determine if certain brain regions are uniquely represented within clusters identified through unsupervised learning.
 
@@ -25,7 +25,7 @@ The analysis follows a multi-step statistical framework to determine if certain 
 
 ---
 
-## 📂 Repository Structure
+## Repository Structure
 
 - `analysis_main.m`: The primary MATLAB script containing the full pipeline.
 
@@ -49,7 +49,7 @@ The analysis follows a multi-step statistical framework to determine if certain 
 
 ---
 
-## 🛠 Requirements
+## Requirements
 
 - **MATLAB** (Tested on R2021a or later)
     
@@ -58,7 +58,7 @@ The analysis follows a multi-step statistical framework to determine if certain 
 
 ---
 
-## 🚀 Usage
+## Usage
 
 1. **Clone the repository**:
     
@@ -85,7 +85,7 @@ The analysis follows a multi-step statistical framework to determine if certain 
 
 ---
 
-## ✉️ Contact
+## Contact
 
 **Minseok Jeong** Neuroscience Graduate Student
 
